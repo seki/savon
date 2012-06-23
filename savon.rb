@@ -33,7 +33,7 @@ class MyData
   end
 end
 
-class Result
+class ResultCache
   def initialize(src)
     @src = src
     @bins = {}
@@ -53,12 +53,13 @@ class Bin
   include Enumerable
   def initialize
     @hash = Hash.new {|h, k| h[k] = 0}
+    @size = 0
   end
-
-  INF=1.0/0
+  attr_reader :size
 
   def emit(*arg)
     @hash[arg] += 1
+    @size += 1
   end
   
   def each
@@ -71,6 +72,7 @@ class Bin
     sort_by {|x| - x[-1]}
   end
 
+  INF=1.0/0
   def sort(nil_as=INF)
     sort_by {|x| x.collect {|y| y ? y : nil_as}}
   end
@@ -78,7 +80,7 @@ end
 
 data = MyData.new('data.txt')
 
-result = Result.new(data)
+result = ResultCache.new(data)
 pp result[1,2].to_a
 pp result[1]
 pp result[2]
