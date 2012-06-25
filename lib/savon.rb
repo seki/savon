@@ -92,12 +92,23 @@ module Savon
     attr_reader :result
     
     def header; @data.head; end
+
+    def page(name)
+      field = name.split('/').collect do |s|
+        @data.head.index(s)
+      end
+      field.shift unless field[0]
+      return field, (@result[*field] rescue nil)
+    end
   end
 end
 
 if __FILE__ == $0
   book = Savon::Book.new('data.txt')
   result = book.result
-  pp result[1, 2, 10]
+  pp result[1, 2, 4].sort
+  pp result[1, 2].sort_by_freq
+  pp book.page('F1/F2')
+  pp book.page('F1/F30')
 end
 
