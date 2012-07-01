@@ -1,4 +1,5 @@
 require 'pp'
+require 'drb'
 
 module Savon
   class MyData
@@ -48,7 +49,7 @@ module Savon
       return @bins[field] if @bins[field]
       bin = Bin.new
       @src.table.each do |q|
-        head, *rest = field.collect {|f| q[f] || [nil]}
+        head, *rest = field.collect {|f| q[f] == [] ? [nil] : q[f]}
         head.product(*rest) {|value| bin.emit(* value)}
       end
       @bins[field] = bin
@@ -58,7 +59,7 @@ module Savon
   class Bin
     include Enumerable
     def initialize
-      @hash = Hash.new {|h, k| h[k] = 0}
+      @hash = Hash.new(0)
       @size = 0
     end
     attr_reader :size
@@ -70,17 +71,17 @@ module Savon
     
     def each
       @hash.each do |k, v|
-        yield k + [v]
+        yield k, v
       end
     end
 
     def sort_by_freq
-      sort_by {|x| - x[-1]}
+      sort_by {|k, v| - v}
     end
 
     INF=1.0/0
     def sort(nil_as=INF)
-      sort_by {|x| x.collect {|y| y ? y : nil_as}}
+      sort_by {|k, v| k.collect {|y| y ? y : nil_as}}
     end
   end
 
@@ -96,9 +97,24 @@ module Savon
     def page(name)
       field = name.split('/').collect do |s|
         @data.head.index(s)
-      end
-      field.shift unless field[0]
+      end.compact
       return field, (@result[*field] rescue nil)
+    end
+  end
+
+  class Front
+    include DRbUndumped
+    def initialize(book)
+      @book = book
+    end
+
+    def [](path)
+      fld, result = @book.page(path)
+      return header(*fld), result
+    end
+    
+    def header(*fld)
+      fld.collect {|idx| @book.header[idx]}
     end
   end
 end
@@ -110,5 +126,7 @@ if __FILE__ == $0
   pp result[1, 2].sort_by_freq
   pp book.page('F1/F2')
   pp book.page('F1/F30')
+  DRb.start_service('druby://localhost:50831', Savon::Front.new(book))
+  DRb.thread.join
 end
 
