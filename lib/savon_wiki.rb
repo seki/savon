@@ -11,11 +11,11 @@ require 'savon'
 
 module Kramdown
   module Converter
-
     class Savon < Html
       include ERB::Util
       def convert_codeblock(el, any)
-        SavonWiki::SavonBox.new($savon).eval_codeblock(el.value)
+        box = Thread.current[:savon_wiki]
+        box.eval_codeblock(el.value)
       rescue Exception
         '<pre>' + h($!.inspect) + '</pre>'
       end
@@ -24,12 +24,16 @@ module Kramdown
 end
 
 class SavonWiki
-  def initialize(dbname='savon')
+  def initialize(savon, dbname='savon')
     @storage = Storage.new(dbname)
-    @book = Book.new(@storage)
+    @book = Book.new(savon, @storage)
     @ui = UI.new(@book)
   end
-  attr_reader :book, :ui
+  attr_reader :book, :savon
+  
+  def start(env, stdin, stdout)
+    @ui.start(env, stdin, stdout)
+  end
 
   class Storage
     def initialize(name)
@@ -53,14 +57,15 @@ class SavonWiki
 
   class Book
     include MonitorMixin
-    def initialize(storage)
+    def initialize(savon, storage)
       super()
       @page = {}
       @storage = storage
+      @savon = savon
     end
 
     def [](name)
-      @page[name] || Page.new(name, @storage[name])
+      @page[name] || Page.new(self, name, @storage[name])
     end
 
     def []=(name, src)
@@ -71,10 +76,15 @@ class SavonWiki
         page.set_src(src)
       end
     end
+
+    def savon_box
+      SavonBox.new(@savon)
+    end
   end
 
   class Page
-    def initialize(name, src)
+    def initialize(book, name, src)
+      @book = book
       @name = name
       set_src(src || "# #{name}\n\nan empty page. edit me.")
     end
@@ -84,7 +94,9 @@ class SavonWiki
       @src = text
       km = Kramdown::Document.new(text)
       @title = fetch_title(km) || @name
+      Thread.current[:savon_wiki] = @book.savon_box
       @html = km.to_savon
+      Thread.current[:savon_wiki] = nil
       @warnings = km.warnings
     end
 
@@ -122,14 +134,14 @@ document.getElementById('edit').style.display = "block";
   </script>
  </head>
  <body>
-  <%= page.html %>
   <a href='javascript:open_edit()'>[edit]</a>
-  <div id='edit' style='display:none;'>
+  <div id='edit' style='display:none;' width=90%>
    <form method='post'>
-    <textarea name='text' rows="40" cols="50"><%=h page.src %></textarea>
-   <input type='submit' name='ok' value='ok'/>
+    <input type='submit' name='ok' value='ok'/><br />
+    <textarea name='text' rows="20" cols="80"><%=h page.src %></textarea>
    </form>
   </div>
+  <%= page.html %>
  </body>
 </html>
 EOS
@@ -172,8 +184,8 @@ EOS
 
   class SavonBox
     include ERB::Util
-    def initialize(savon)
-      @savon = savon
+    def initialize(context)
+      @savon = context
       @legend = {}
     end
     
@@ -181,16 +193,19 @@ EOS
       eval(value, binding)
     end
 
-    def report(path)
+    def report(path, freq)
       head, result = @savon[path]
 
-      it = result.sort.collect do |k, v|
+      sorted = freq ? result.sort_by_freq : result.sort
+
+      it = sorted.collect do |k, v|
         [k.zip(head).collect {|value, name|
-           if @legend[name]
+           legend = @legend[name] || @savon.legend[name]
+           if legend
              if value
-               @legend[name][value] || value
+               legend[value] || value
              else
-               @legend[name][0]
+               legend[0]
              end
            else
              value
@@ -202,13 +217,17 @@ EOS
       [head + [result.size]] + it
     end
 
+    def default_legend(field, assoc)
+      @savon.set_legend(field, assoc)
+    end
+
     def legend(field, assoc)
       @legend[field] = assoc
     end
 
-    ERB.new(<<EOS).def_method(self, 'table(path)')
+    ERB.new(<<EOS).def_method(self, 'table(path, freq=false)')
 <table><%
-   head, *rest = report(path)
+   head, *rest = report(path, freq)
 pp rest
 %><div class="savontable"><tr><%
    head.each {|x| %><th><%=h x%></th><% } %></tr><%
@@ -219,13 +238,21 @@ pp rest
    }
  %></table></div>
 EOS
+
+    def add_view(name, fields, &proc)
+      @savon.add_view(name, fields, &proc)
+    end
   end
 end
 
 if __FILE__ == $0
   savon = Savon::Book.new(ARGV.shift)
-  $savon = Savon::Front.new(savon)
-  wiki = SavonWiki.new
-  DRb.start_service('druby://localhost:50830', wiki.ui)
+  front = Savon::Front.new(savon)
+  wiki = SavonWiki.new(front)
+
+  DRb.start_service('druby://localhost:50830', wiki)
   DRb.thread.join
 end
+
+
+

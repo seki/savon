@@ -6,6 +6,7 @@ module Savon
     def initialize(fname)
       @head = []
       @table = []
+      @view = {}
 
       File.open(fname) do |fp|
         line = fp.gets
@@ -16,6 +17,41 @@ module Savon
       end
     end
     attr_reader :head, :table
+
+    def at(ary, idx)
+      it = ary[idx]
+      it.nil? || it.empty? ? [nil] : it
+    end
+
+    def build_view(name)
+      fields = @view[name][0]
+      idx = fields.collect {|s| head.index(s)}
+      [method(:eval_view), [idx, @view[name][1]]]
+    end
+
+    def eval_view(ary, idxes, proc)
+      src = idxes.collect do |idx|
+        at(ary, idx)
+      end
+      proc.call(src)
+    end
+
+    def each_row(*field_name)
+      field = field_name.collect do |s|
+        if @view[s]
+          build_view(s)
+        else
+          idx = head.index(s)
+          [method(:at), [idx]]
+        end
+      end
+      @table.each do |q|
+        it = field.collect do |m, arg|
+          m.call(q, *arg)
+        end
+        yield(it)
+      end
+    end
 
     def size
       @table.size
@@ -37,6 +73,10 @@ module Savon
         end
       end
     end
+    
+    def add_view(name, fields, &proc)
+      @view[name] = [fields, proc]
+    end
   end
 
   class ResultCache
@@ -44,12 +84,16 @@ module Savon
       @src = src
       @bins = {}
     end
+
+    def clear
+      @bins = {}
+    end
     
     def [](*field)
       return @bins[field] if @bins[field]
       bin = Bin.new
-      @src.table.each do |q|
-        head, *rest = field.collect {|f| q[f] == [] ? [nil] : q[f]}
+      @src.each_row(*field) do |ary|
+        head, *rest = ary
         head.product(*rest) {|value| bin.emit(* value)}
       end
       @bins[field] = bin
@@ -95,10 +139,13 @@ module Savon
     def header; @data.head; end
 
     def page(name)
-      field = name.split('/').collect do |s|
-        @data.head.index(s)
-      end.compact
+      field = name.split('/')
       return field, (@result[*field] rescue nil)
+    end
+    
+    def add_view(name, fields, &proc)
+      @data.add_view(name, fields, &proc)
+      @result.clear
     end
   end
 
@@ -106,27 +153,43 @@ module Savon
     include DRbUndumped
     def initialize(book)
       @book = book
+      @legend = {}
+    end
+    attr_reader :legend
+
+    def set_legend(field, assoc)
+      @legend[field] = assoc
     end
 
     def [](path)
-      fld, result = @book.page(path)
-      return header(*fld), result
+      return @book.page(path)
     end
     
-    def header(*fld)
-      fld.collect {|idx| @book.header[idx]}
+    def add_view(name, fields, &proc)
+      @book.add_view(name, fields, &proc)
     end
   end
 end
 
 if __FILE__ == $0
-  book = Savon::Book.new('data.txt')
+  book = Savon::Book.new(ARGV.shift)
   result = book.result
-  pp result[1, 2, 4].sort
-  pp result[1, 2].sort_by_freq
+  pp result['F1'].sort
+  pp result['F1', 'F2'].sort_by_freq
   pp book.page('F1/F2')
   pp book.page('F1/F30')
-  DRb.start_service('druby://localhost:50831', Savon::Front.new(book))
-  DRb.thread.join
+  book.add_view('Q2_2V', ['Q2_2']) do |req|
+    req[0].collect do |it|
+      case it
+      when 1, 2
+        1
+      when 4, 5
+        2
+      else
+        0
+      end
+    end
+  end
+  pp result['Q2_2V'].sort
 end
 
