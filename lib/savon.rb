@@ -25,8 +25,19 @@ module Savon
 
     def build_view(name)
       fields = @view[name][0]
-      idx = fields.collect {|s| head.index(s)}
-      [method(:eval_view), [idx, @view[name][1]]]
+      if String === fields
+        idx = head.index(fields)
+        [method(:eval_simple_view), [idx, @view[name][1]]]
+      else
+        idx = fields.collect {|s| head.index(s)}
+        [method(:eval_view), [idx, @view[name][1]]]
+      end
+    end
+
+    def eval_simple_view(ary, idx, proc)
+      at(ary, idx).collect do |it|
+        proc.call(it)
+      end
     end
 
     def eval_view(ary, idxes, proc)
@@ -178,8 +189,8 @@ if __FILE__ == $0
   pp result['F1', 'F2'].sort_by_freq
   pp book.page('F1/F2')
   pp book.page('F1/F30')
-  book.add_view('Q2_2V', ['Q2_2']) do |req|
-    req[0].collect do |it|
+  book.add_view('Q2_2V', ['Q2_1', 'Q2_2']) do |req|
+    req[1].collect do |it|
       case it
       when 1, 2
         1
@@ -191,5 +202,16 @@ if __FILE__ == $0
     end
   end
   pp result['Q2_2V'].sort
+  book.add_view('Q2_2R', 'Q2_2') do |value|
+    case value
+    when 4, 5
+      1
+    when 1, 2
+      2
+    else
+      0
+    end
+  end
+  pp result['Q2_2R'].sort
 end
 
